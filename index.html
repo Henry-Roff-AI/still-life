@@ -100,17 +100,17 @@
    ============================================================================ */
 
 /* ---- tunable constants -------------------------------------------------- */
-const CELL          = 6;            // px per cell on screen (bilinear-upscaled → soft glow)
+const CELL          = 8;            // px per cell on screen (bilinear-upscaled → soft glow)
 const SIM_HZ        = 18;           // simulation ticks/sec (slow = contemplative)
-const INIT_DENSITY  = 0.20;         // initial alive fraction of the soup
-const BIRTH_NOISE   = 0.00012;      // P(dead cell spontaneously born) per tick — keeps it alive forever
+const INIT_DENSITY  = 0.30;         // initial alive fraction of the soup
+const BIRTH_NOISE   = 0.0002;       // P(dead cell spontaneously born) per tick — keeps it alive + full
 const STALL_THRESH  = 0.0022;       // activity floor below which the field is "settling"
 const STALL_TICKS   = 80;           // consecutive calm ticks before a reseed bloom
 const SEED_BLOB     = 22;           // reseed / click patch size (cells)
 const SEED_DENS     = 0.40;         // reseed patch density
-const FADE_ALPHA    = 0.085;        // trail persistence (lower = longer dreamier trails)
+const FADE_ALPHA    = 0.058;        // trail persistence (lower = longer dreamier trails)
 const DRAW_ALPHA    = 0.95;         // draw strength of live cells over the fading trails
-const AGE_SATURATE  = 95;           // age (frames) at which a cell is "fully settled"
+const AGE_SATURATE  = 50;           // age (frames) at which a cell is "fully settled" (warm)
 const BG            = [6, 8, 16];   // background ink (cold near-black indigo)
 
 /* ---- canvas + grid ------------------------------------------------------ */
@@ -201,32 +201,29 @@ function step() {
   else stallCounter = 0;
 }
 
-/* ---- colour: young = cool dim spark · long-lived = warm bright core ------
-   What persists becomes warm and luminous; the churn stays cool and faint. */
+/* ---- colour: a cool→warm RGB ramp (no green hue-sweep). newborn = faint cool
+   blue spark · settling = bright cyan · long-lived = warm pale gold. What
+   persists becomes warm and luminous; the churn stays cool and faint. */
+const STOPS = [          // [t, r, g, b]
+  [0.00,  40,  82, 150], // newborn — dim cool blue (the churn, kept faint)
+  [0.45, 120, 205, 230], // settling — bright cyan
+  [1.00, 245, 210, 150], // long-lived — warm pale gold (the persistent cores)
+];
 const COLOR_LUT = (() => {
   const lut = new Uint32Array(AGE_SATURATE + 1);
   for (let a = 0; a <= AGE_SATURATE; a++) {
-    const t = a / AGE_SATURATE;                     // 0 new .. 1 settled
-    const hue = 196 - 168 * t;                      // cyan(196) -> amber(28)
-    const sat = 0.82 - 0.20 * t;                    // settle a touch
-    const lig = 0.30 + 0.30 * (t * t);              // dim spark -> bright core
-    lut[a] = hslPacked(hue, sat, lig);
+    const t = a / AGE_SATURATE;
+    let s = 0; while (s < STOPS.length - 2 && t > STOPS[s + 1][0]) s++;
+    const A = STOPS[s], B = STOPS[s + 1];
+    const f = (t - A[0]) / (B[0] - A[0] || 1);
+    const lum = 0.65 + 0.35 * t;                    // older = brighter core
+    const r = ((A[1] + (B[1] - A[1]) * f) * lum) | 0;
+    const g = ((A[2] + (B[2] - A[2]) * f) * lum) | 0;
+    const b = ((A[3] + (B[3] - A[3]) * f) * lum) | 0;
+    lut[a] = (255 << 24) | (b << 16) | (g << 8) | r; // little-endian ABGR
   }
   return lut;
 })();
-function hslPacked(h, s, l) {
-  h = ((h % 360) + 360) % 360;
-  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
-  let r, g, b;
-  if (h < 60)      { r = c; g = x; b = 0; }
-  else if (h <120) { r = x; g = c; b = 0; }
-  else if (h <180) { r = 0; g = c; b = x; }
-  else if (h <240) { r = 0; g = x; b = c; }
-  else if (h <300) { r = x; g = 0; b = c; }
-  else             { r = c; g = 0; b = x; }
-  const R = ((r + m) * 255) | 0, G = ((g + m) * 255) | 0, B = ((b + m) * 255) | 0;
-  return (255 << 24) | (B << 16) | (G << 8) | R;     // little-endian ABGR
-}
 
 /* ---- render: paint grid (age-coloured) → fade trails → additive upscale - */
 function render() {
